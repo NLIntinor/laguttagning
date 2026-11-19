@@ -62,7 +62,7 @@
   <section id="tab-trupp">
     <h3>Trupp</h3>
     <table>
-      <thead><tr><th class="small">Nr</th><th>Namn</th><th>Primär</th><th>Reserv</th><th class="small"></th></tr></thead>
+      <thead><tr><th class="small">Nr</th><th>Namn</th><th>Positioner <span class="muted" style="font-weight:normal">(klicka: av → reserv → primär)</span></th><th class="small"></th></tr></thead>
       <tbody id="squadBody"></tbody>
     </table>
     <form id="addForm" class="row">
@@ -271,7 +271,7 @@ async function cloudInit() {
 }
 function commit() { save(); render(); }
 
-function posTag(p, reserve) { return `<span class="pos ${p}${reserve ? " res" : ""}" title="${POS_NAME[p]}">${p}</span>`; }
+function posTag(p, reserve) { if (!p) return ""; return `<span class="pos ${p}${reserve ? " res" : ""}" title="${POS_NAME[p]}">${p}</span>`; }
 function sorted() { return [...state.players].sort((a, b) => (a.nr ?? 999) - (b.nr ?? 999) || a.name.localeCompare(b.name, "sv")); }
 
 function score(p) {
@@ -370,8 +370,10 @@ function render() {
     <tr data-id="${p.id}">
       <td><input type="number" data-f="nr" value="${esc(p.nr)}"></td>
       <td><input data-f="name" value="${esc(p.name)}"></td>
-      <td><select data-f="prim">${POS.map(x => `<option ${x === p.prim ? "selected" : ""}>${x}</option>`).join("")}</select></td>
-      <td>${POS.filter(x => x !== p.prim).map(x => `<label style="display:inline-flex;margin-right:.6rem"><input type="checkbox" data-res="${x}" ${(p.res || []).includes(x) ? "checked" : ""}>${posTag(x)}</label>`).join("")}</td>
+      <td style="white-space:nowrap">${POS.map(x => {
+        const st = x === p.prim ? "prim" : (p.res || []).includes(x) ? "res" : "off";
+        return `<span data-cyc="${x}" class="pos ${x}" role="button" title="${POS_NAME[x]}: ${st === "prim" ? "primär" : st === "res" ? "reserv" : "av"}" style="cursor:pointer;padding:.25rem .5rem;${st === "res" ? "opacity:.55" : st === "off" ? "opacity:.15" : "outline:2px solid currentColor;outline-offset:1px"}">${x}</span>`;
+      }).join("")}</td>
       <td><button class="outline secondary" data-del>✕</button></td>
     </tr>`).join("") || `<tr><td colspan="5" class="muted">Ingen trupp än – lägg till spelare nedan eller importera.</td></tr>`;
 
@@ -492,6 +494,14 @@ document.addEventListener("change", e => {
 });
 $("wWeek").oninput = e => { state.settings.wWeek = +e.target.value; commit(); };
 document.addEventListener("click", e => {
+  if (e.target.matches("[data-cyc]")) {
+    const p = byId(e.target), x = e.target.dataset.cyc, res = p.res || [];
+    if (x === p.prim) { p.prim = res[0] || null; p.res = res.slice(1); }          // primär → av
+    else if (res.includes(x)) { p.res = res.filter(y => y !== x).concat(p.prim ? [p.prim] : []); p.prim = x; } // reserv → primär
+    else if (!p.prim) p.prim = x;                                                // av → primär om ingen primär finns
+    else p.res = POS.filter(y => y === x || res.includes(y));                     // av → reserv
+    commit();
+  }
   if (e.target.matches("[data-del]")) { const p = byId(e.target); if (confirm(`Ta bort ${p.name}?`)) { state.players = state.players.filter(x => x !== p); commit(); } }
   if (e.target.matches("[data-mdel]")) { state.matches = state.matches.filter(m => m.id !== e.target.closest("tr").dataset.mid); commit(); }
 });
