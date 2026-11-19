@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laguttagning</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  main { max-width: 1200px; }
+  .tabs { display:flex; gap:.5rem; margin-bottom:1rem; flex-wrap:wrap; }
+  .tabs button { width:auto; }
+  .tabs button.inactive { background:transparent; color:var(--pico-primary); }
+  table input, table select { margin:0; padding:.25rem .4rem; height:auto; }
+  table input[type=number] { width:5.5rem; }
+  .pos { display:inline-block; padding:.05rem .45rem; border-radius:.4rem; font-size:.8rem; font-weight:600; color:#fff; margin-right:.2rem; }
+  .MV { background:#8e44ad; } .B { background:#2980b9; } .C { background:#27ae60; } .F { background:#d35400; }
+  .res { opacity:.55; }
+  .grid-matches { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1rem; }
+  .bar { height:.45rem; background:var(--pico-primary); border-radius:.2rem; }
+  .muted { color:var(--pico-muted-color); font-size:.85rem; }
+  .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+  .row > * { width:auto; margin:0; }
+  td.small, th.small { width:1%; white-space:nowrap; }
+</style>
+</head>
+<body>
+<main class="container">
+  <div class="row" style="justify-content:space-between">
+    <h1 style="margin:0">Laguttagning</h1>
+    <span id="cloudStatus" class="muted">Lokalt läge (sparas i webbläsaren)</span>
+  </div>
+  <dialog id="loginDlg">
+    <article>
+      <h3>Logga in</h3>
+      <form id="loginForm">
+        <input type="password" id="loginPw" placeholder="Lösenord" autocomplete="current-password" required>
+        <button type="submit" id="loginBtn">Logga in</button>
+        <p id="loginMsg" class="muted"></p>
+      </form>
+    </article>
+  </dialog>
+  <div class="tabs">
+    <button data-tab="trupp">1. Trupp</button>
+    <button data-tab="narvaro">2. Närvaro</button>
+    <button data-tab="matcher">3. Matcher</button>
+    <button data-tab="uttag">4. Uttagning</button>
+    <button data-tab="data">Import/Export</button>
+  </div>
+
+  <section id="tab-trupp">
+    <h3>Trupp</h3>
+    <table>
+      <thead><tr><th class="small">Nr</th><th>Namn</th><th>Primär</th><th>Reserv</th><th class="small"></th></tr></thead>
+      <tbody id="squadBody"></tbody>
+    </table>
+    <form id="addForm" class="row">
+      <input id="newNr" type="number" placeholder="Nr" style="width:6rem">
+      <input id="newName" placeholder="Namn" required style="flex:1;min-width:12rem">
+      <select id="newPrim"></select>
+      <button type="submit">Lägg till</button>
+    </form>
+  </section>
+
+  <section id="tab-narvaro">
+    <h3>Träningsnärvaro</h3>
+    <p class="muted">Fyll i antal pass (eller procent). Max-värdena används för att normalisera. Viktningen avgör hur mycket veckans närvaro väger mot totalen.</p>
+    <div class="row">
+      <label>Max totalt <input id="maxTotal" type="number" min="1"></label>
+      <label>Max veckan <input id="maxWeek" type="number" min="1"></label>
+      <label style="flex:1">Vikt veckan: <b id="wLabel"></b>
+        <input id="wWeek" type="range" min="0" max="100" step="5"></label>
+      <button class="secondary" id="newWeek">Ny vecka (nollställ veckan)</button>
+    </div>
+    <table>
+      <thead><tr><th>Namn</th><th class="small">Totalt</th><th class="small">Veckan</th><th class="small">Kan spela</th><th>Poäng</th></tr></thead>
+      <tbody id="attBody"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-matcher">
+    <h3>Helgens matcher</h3>
+    <div class="row">
+      <label>Max matcher per spelare <input id="maxPer" type="number" min="1" max="5"></label>
+      <label>Minst minuter mellan matchstarter för att dubblera <input id="gapMin" type="number" min="0" step="15"></label>
+    </div>
+    <p class="muted">En spelare kan spela flera matcher om de inte krockar (starttiderna ligger minst så långt isär). Matcher utan starttid räknas som krockande. Alla får en match först; extra matcher går till dem med bäst närvaro på rätt position.</p>
+    <table>
+      <thead><tr><th>Match</th><th>Start</th><th class="small">MV</th><th class="small">B</th><th class="small">C</th><th class="small">F</th><th class="small"></th></tr></thead>
+      <tbody id="matchBody"></tbody>
+    </table>
+    <button id="addMatch">+ Lägg till match</button>
+    <div id="ibMatches"></div>
+  </section>
+
+  <section id="tab-uttag">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">Förslag</h3>
+      <button class="secondary" id="copyBtn">Kopiera som text</button>
+    </div>
+    <p class="muted">Bäst närvaro väljs först, fördelat jämnt mellan matcherna (ormdraft). Primär position före reservposition; bänkade spelare kan flyttas genom att ändra "Kan spela" eller närvaron.</p>
+    <div id="result" class="grid-matches"></div>
+    <h4>Ej uttagna</h4>
+    <div id="bench"></div>
+  </section>
+
+  <section id="tab-data">
+    <h3>Import / Export</h3>
+    <article>
+      <h5>Direkt från innebandy.se</h5>
+      <p class="muted">stats.innebandy.se använder ett signerat API som webbläsaren inte kan anropa direkt, så lagets JSON hämtas med projektets befintliga hämtare (tools/fetch-team.js, samma som ib-schedule-overlap.rb använder). Klistra in lagets länk, t.ex. https://stats.innebandy.se/sasong/44/lag/116542/spelprogram:</p>
+      <div class="row">
+        <input id="ibUrl" placeholder="https://stats.innebandy.se/sasong/…/lag/…" style="flex:1;min-width:20rem">
+      </div>
+      <p id="ibCmd" class="muted"></p>
+      <p class="muted">Välj sedan filen seasons_SÄSONG_teams_LAG.json (eller en cachad cache/schedule/team_*.json). Truppen (namn, nummer, position) uppdateras och kommande matcher dyker upp under fliken Matcher.</p>
+      <input type="file" id="fileIb" accept=".json">
+    </article>
+    <article>
+      <h5>Trupp från Excel/CSV</h5>
+      <p class="muted">Kolumner: <b>Namn</b>, <b>Nummer</b>, <b>Position</b> (MV/B/C/F), <b>Reserv</b> (t.ex. "C,F"). Befintliga spelare med samma namn uppdateras.</p>
+      <input type="file" id="fileSquad" accept=".xlsx,.xls,.csv">
+    </article>
+    <article>
+      <h5>Närvaro från Excel/CSV (t.ex. SportAdmin-export)</h5>
+      <p class="muted">Kolumner: <b>Namn</b> + <b>Totalt</b> och/eller <b>Vecka</b>. Matchas mot namn i truppen (skiftlägesokänsligt). Procent ("85 %") fungerar också.</p>
+      <input type="file" id="fileAtt" accept=".xlsx,.xls,.csv">
+    </article>
+    <article>
+      <h5>Backup (JSON)</h5>
+      <div class="row">
+        <button id="exportJson">Exportera</button>
+        <input type="file" id="fileJson" accept=".json">
+      </div>
+      <p class="muted">JS-API för integration (konsolen eller ett bokmärke): <b>LagAPI.getState()</b>, <b>LagAPI.setState(obj)</b>, <b>LagAPI.importSquad([{namn,nummer,position,reserv}])</b>, <b>LagAPI.importAttendance([{namn,totalt,vecka}])</b>, <b>LagAPI.select()</b>.</p>
+    </article>
+    <article>
+      <h5>Delning via GitHub (krypterat)</h5>
+      <p class="muted">Engångsinställning. Datan krypteras med lösenordet och sparas i ett privat repo. Token (fine-grained, bara <b>Contents: read and write</b> på datarepot) krypteras också med lösenordet och laddas ner som <b>token.enc</b>, som läggs bredvid index.html i appens repo. Inget sparas i klartext.</p>
+      <div class="row">
+        <input id="cfgRepo" placeholder="Datarepo, t.ex. NLIntinor/laguttagning-data" style="flex:1;min-width:16rem">
+        <input id="cfgToken" type="password" placeholder="GitHub-token" style="flex:1;min-width:16rem" autocomplete="off">
+        <input id="cfgPw" type="password" placeholder="Lösenord (lång lösenfras)" style="flex:1;min-width:16rem" autocomplete="new-password">
+        <button id="cfgBtn">Testa, ladda upp data och skapa token.enc</button>
+      </div>
+    </article>
+    <p id="msg"></p>
+  </section>
+</main>
+
+<script>
+const POS = ["MV","B","C","F"];
+const POS_NAME = {MV:"Målvakt",B:"Back",C:"Center",F:"Forward"};
+const KEY = "laguttagning.v1";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+let state = load();
+function load() {
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.players) return s; } catch (e) {}
+  return { players: [], settings: { maxTotal: 20, maxWeek: 3, wWeek: 40, maxPer: 1 },
+           matches: [{ id: uid(), name: "Match 1", need: { MV:1, B:4, C:2, F:4 } }] };
+}
+function save() { localStorage.setItem(KEY, JSON.stringify(state)); cloudSchedule(); }
+
+// ---------- Kryptering (PBKDF2 + AES-GCM) ----------
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const keyCache = new Map();
+async function deriveKey(pw, salt) {
+  const id = salt + "|" + pw;
+  if (!keyCache.has(id)) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
+    keyCache.set(id, await crypto.subtle.deriveKey({ name: "PBKDF2", salt: unb64(salt), iterations: 600000, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+  }
+  return keyCache.get(id);
+}
+async function encrypt(obj, pw, salt = b64(crypto.getRandomValues(new Uint8Array(16)))) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await deriveKey(pw, salt), new TextEncoder().encode(JSON.stringify(obj)));
+  return JSON.stringify({ v: 1, salt, iv: b64(iv), ct: b64(ct) });
+}
+async function decrypt(text, pw) {
+  const e = JSON.parse(text);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(e.iv) }, await deriveKey(pw, e.salt), unb64(e.ct));
+  return { obj: JSON.parse(new TextDecoder().decode(pt)), salt: e.salt };
+}
+
+// ---------- GitHub-lagring ----------
+const DATA_PATH = "data.enc";
+const cloud = { ready: false, cfg: null, pw: null, sha: null, salt: null, timer: null, saving: false };
+function gh(cfg, method = "GET", body) {
+  return fetch(`https://api.github.com/repos/${cfg.repo}/contents/${DATA_PATH}`, {
+    method, cache: "no-store",
+    headers: { Authorization: `Bearer ${cfg.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+    body: body && JSON.stringify(body),
+  });
+}
+function setStatus(t, bad) { $("cloudStatus").textContent = t; $("cloudStatus").style.color = bad ? "#c0392b" : ""; }
+async function cloudPull() {
+  const r = await gh(cloud.cfg);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GitHub svarade ${r.status}`);
+  const j = await r.json();
+  const d = await decrypt(atob(j.content.replace(/\n/g, "")), cloud.pw);
+  cloud.sha = j.sha; cloud.salt = d.salt;
+  return d.obj;
+}
+async function cloudPush() {
+  if (cloud.saving) return cloudSchedule();
+  cloud.saving = true; setStatus("Sparar…");
+  try {
+    const content = btoa(await encrypt(state, cloud.pw, cloud.salt || undefined));
+    const r = await gh(cloud.cfg, "PUT", { message: "Uppdatera laguttagning", content, ...(cloud.sha ? { sha: cloud.sha } : {}) });
+    if (r.status === 409 || r.status === 422) {
+      setStatus("Krock: någon annan har sparat", true);
+      if (confirm("Någon annan har sparat ändringar sedan du laddade sidan. Hämta deras version? (Dina senaste ändringar försvinner.)")) {
+        state = await cloudPull(); localStorage.setItem(KEY, JSON.stringify(state)); render(); setStatus("Sparat i GitHub");
+      }
+      return;
+    }
+    if (!r.ok) throw new Error(`GitHub svarade ${r.status}`);
+    cloud.sha = (await r.json()).content.sha; cloud.dirty = false;
+    setStatus("Sparat i GitHub " + new Date().toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" }));
+  } catch (e) { setStatus("Kunde inte spara: " + e.message, true); }
+  finally { cloud.saving = false; }
+}
+function cloudSchedule() {
+  if (!cloud.ready) return;
+  clearTimeout(cloud.timer); cloud.dirty = true; setStatus("Osparat…");
+  cloud.timer = setTimeout(cloudPush, 1500);
+}
+async function cloudInit() {
+  let enc;
+  try { const r = await fetch("token.enc", { cache: "no-store" }); if (!r.ok) return; enc = await r.text(); }
+  catch (e) { return; } // lokalt läge (file:// eller ingen token.enc)
+  $("loginDlg").showModal(); $("loginPw").focus();
+  $("loginForm").onsubmit = async ev => {
+    ev.preventDefault();
+    $("loginBtn").setAttribute("aria-busy", "true"); $("loginMsg").textContent = "";
+    try {
+      const pw = $("loginPw").value;
+      cloud.cfg = (await decrypt(enc, pw)).obj; cloud.pw = pw;
+      const remote = await cloudPull();
+      if (remote) { state = remote; localStorage.setItem(KEY, JSON.stringify(state)); }
+      cloud.ready = true; render(); $("loginDlg").close();
+      setStatus("Inloggad – sparas i GitHub");
+      if (!remote) cloudPush();
+    } catch (e) {
+      $("loginMsg").textContent = e.name === "OperationError" ? "Fel lösenord." : "Fel: " + e.message;
+    } finally { $("loginBtn").removeAttribute("aria-busy"); }
+  };
+  // Hämta andras ändringar när fliken får fokus igen (om inget osparat finns)
+  window.addEventListener("focus", async () => {
+    if (!cloud.ready || cloud.dirty || cloud.saving) return;
+    try { const before = cloud.sha, remote = await cloudPull();
+      if (remote && cloud.sha !== before) { state = remote; localStorage.setItem(KEY, JSON.stringify(state)); render(); setStatus("Uppdaterat från GitHub"); } } catch (e) {}
+  });
+}
+function commit() { save(); render(); }
+
+function posTag(p, reserve) { return `<span class="pos ${p}${reserve ? " res" : ""}" title="${POS_NAME[p]}">${p}</span>`; }
+function sorted() { return [...state.players].sort((a, b) => (a.nr ?? 999) - (b.nr ?? 999) || a.name.localeCompare(b.name, "sv")); }
+
+function score(p) {
+  const s = state.settings, w = s.wWeek / 100;
+  const t = Math.min(1, (+p.total || 0) / (s.maxTotal || 1));
+  const v = Math.min(1, (+p.week || 0) / (s.maxWeek || 1));
+  return (1 - w) * t + w * v;
+}
+
+// ---------- Uttagning ----------
+function select() {
+  const maxPer = state.settings.maxPer || 1;
+  const pool = state.players.filter(p => p.available !== false)
+    .map(p => ({ p, s: score(p), used: 0 }))
+    .sort((a, b) => b.s - a.s || a.p.name.localeCompare(b.p.name, "sv"));
+  const gap = (state.settings.gapMin ?? 120) * 60000;
+  const clash = (a, b) => !a.start || !b.start || Math.abs(new Date(a.start) - new Date(b.start)) < gap;
+  const lineups = state.matches.map(m => ({ match: m, slots: [] }));
+  pool.forEach(e => e.ms = []);
+  const canPlay = (l, e) => e.used < maxPer && !e.ms.some(m => m === l.match || clash(m, l.match));
+
+  // Steg 1: alla får en match (primär först, sedan reserv), jämnt fördelat mellan matcherna.
+  const primary = (e, pos) => e.p.prim === pos;
+  const reserve = (e, pos) => (e.p.res || []).includes(pos);
+  const phases = [
+    { kind: 0, ok: (e, pos) => e.used === 0 && primary(e, pos) },
+    { kind: 1, ok: (e, pos) => e.used === 0 && reserve(e, pos) },
+  ];
+  const fill = () => phases.forEach(({ kind: phase, ok }) => {
+    for (const pos of POS) {
+      let round = 0, progress = true;
+      while (progress) {
+        progress = false;
+        const order = round % 2 ? [...lineups].reverse() : lineups;
+        for (const l of order) {
+          const have = l.slots.filter(x => x.pos === pos).length;
+          if (have >= (l.match.need[pos] || 0)) continue;
+          const cand = pool.filter(e => canPlay(l, e) && ok(e, pos))
+            .sort((a, b) => b.s - a.s)[0];
+          if (cand) { cand.used++; cand.ms.push(l.match); l.slots.push({ e: cand, pos, kind: phase }); progress = true; }
+        }
+        round++;
+      }
+    }
+  });
+  fill();
+  // Fyll en saknad position: direkt från poolen, annars genom att flytta en spelare i matchen
+  // till en position hon kan (primär/reserv) och fylla hennes gamla plats, i flera led.
+  const can = (e, pos) => e.p.prim === pos || (e.p.res || []).includes(pos);
+  const open = (l, pos) => (l.match.need[pos] || 0) - l.slots.filter(x => x.pos === pos).length;
+  const tryFill = (l, pos, seen, from) => {
+    const cand = from.filter(e => canPlay(l, e) && can(e, pos))
+      .sort((a, b) => a.used - b.used || (b.p.prim === pos) - (a.p.prim === pos) || b.s - a.s)[0];
+    if (cand) { cand.used++; cand.ms.push(l.match); l.slots.push({ e: cand, pos, kind: cand.p.prim === pos ? 0 : 1 }); return true; }
+    const movers = l.slots.filter(y => y.pos !== pos && !seen.has(y.pos) && can(y.e, pos))
+      .sort((a, b) => (b.e.p.prim === pos) - (a.e.p.prim === pos) || a.e.s - b.e.s);
+    for (const y of movers) {
+      const old = y.pos, oldKind = y.kind;
+      y.pos = pos; y.kind = y.e.p.prim === pos ? 0 : 1;
+      if (tryFill(l, old, new Set([...seen, old]), from)) return true;
+      y.pos = old; y.kind = oldKind;
+    }
+    return false;
+  };
+  // Steg 2: extra matcher delas ut spelare för spelare i närvaroordning (oavsett om positionen
+  // är primär eller reserv). Spelaren får en ledig plats, ev. genom att andra flyttas om.
+  for (let u = 0; u < maxPer; u++) {
+    for (const e of pool.filter(x => x.used === u).sort((a, b) => b.s - a.s)) {
+      if (e.used !== u) continue;
+      const ls = lineups.filter(l => canPlay(l, e));
+      const direct = ls.find(l => open(l, e.p.prim) > 0);
+      if (direct) { e.used++; e.ms.push(direct.match); direct.slots.push({ e, pos: e.p.prim, kind: 0 }); continue; }
+      ls.some(l => POS.some(pos => open(l, pos) > 0 && tryFill(l, pos, new Set([pos]), [e])));
+    }
+  }
+  // Steg 3: fyll det som fortfarande saknas med vem som helst som kan positionen.
+  for (const l of lineups) for (const pos of POS) {
+    while (open(l, pos) > 0 && tryFill(l, pos, new Set([pos]), pool));
+  }
+  const bench = pool.filter(e => e.used === 0);
+  const unavailable = state.players.filter(p => p.available === false);
+  return { lineups, bench, unavailable, pool, clash, why: (l, e) => e.ms.includes(l.match) ? "redan i matchen" :
+    e.used >= maxPer ? `max ${maxPer} match${maxPer > 1 ? "er" : ""}` :
+    !l.match.start ? "matchen saknar starttid" :
+    (e.ms.find(m => clash(m, l.match)) ? `krock med ${e.ms.find(m => clash(m, l.match)).name}${e.ms.find(m => clash(m, l.match)).start ? "" : " (saknar starttid)"}` : "?") };
+}
+
+// ---------- Rendering ----------
+function render() {
+  const s = state.settings;
+  for (const m of state.matches) if (!m.start && m.ibId) {
+    const ib = (state.ibMatches || []).find(x => x.id === m.ibId);
+    if (ib?.start) m.start = ib.start.slice(0, 16);
+  }
+  // Trupp
+  $("squadBody").innerHTML = sorted().map(p => `
+    <tr data-id="${p.id}">
+      <td><input type="number" data-f="nr" value="${esc(p.nr)}"></td>
+      <td><input data-f="name" value="${esc(p.name)}"></td>
+      <td><select data-f="prim">${POS.map(x => `<option ${x === p.prim ? "selected" : ""}>${x}</option>`).join("")}</select></td>
+      <td>${POS.filter(x => x !== p.prim).map(x => `<label style="display:inline-flex;margin-right:.6rem"><input type="checkbox" data-res="${x}" ${(p.res || []).includes(x) ? "checked" : ""}>${posTag(x)}</label>`).join("")}</td>
+      <td><button class="outline secondary" data-del>✕</button></td>
+    </tr>`).join("") || `<tr><td colspan="5" class="muted">Ingen trupp än – lägg till spelare nedan eller importera.</td></tr>`;
+
+  // Närvaro
+  $("maxTotal").value = s.maxTotal; $("maxWeek").value = s.maxWeek; $("wWeek").value = s.wWeek;
+  $("wLabel").textContent = `${s.wWeek}% vecka / ${100 - s.wWeek}% totalt`;
+  $("attBody").innerHTML = sorted().map(p => {
+    const sc = score(p);
+    return `<tr data-id="${p.id}">
+      <td>${posTag(p.prim)} ${esc(p.name)}</td>
+      <td><input type="number" min="0" data-f="total" value="${esc(p.total ?? "")}"></td>
+      <td><input type="number" min="0" data-f="week" value="${esc(p.week ?? "")}"></td>
+      <td><input type="checkbox" role="switch" data-f="available" ${p.available !== false ? "checked" : ""}></td>
+      <td><div class="bar" style="width:${Math.round(sc * 100)}%"></div><span class="muted">${Math.round(sc * 100)}</span></td>
+    </tr>`;
+  }).join("");
+
+  // Matcher
+  $("maxPer").value = s.maxPer;
+  $("gapMin").value = s.gapMin ?? 120;
+  $("matchBody").innerHTML = state.matches.map(m => `
+    <tr data-mid="${m.id}">
+      <td><input data-mf="name" value="${esc(m.name)}"></td>
+      <td><input type="datetime-local" data-mf="start" value="${esc(m.start || "")}"${m.start ? "" : ` style="border-color:#c0392b" title="Saknar starttid – räknas som krock med alla matcher"`}></td>
+      ${POS.map(x => `<td><input type="number" min="0" data-need="${x}" value="${m.need[x] ?? 0}"></td>`).join("")}
+      <td><button class="outline secondary" data-mdel>✕</button></td>
+    </tr>`).join("");
+
+  // innebandy.se-matcher
+  const ib = (state.ibMatches || []).filter(m => !m.start || m.start >= new Date().toISOString().slice(0, 10));
+  $("ibMatches").innerHTML = ib.length ? `<h4>Kommande matcher från innebandy.se</h4><table><tbody>` +
+    ib.map(m => `<tr><td class="small">${esc(fmtWhen(m.start))}</td><td>${esc(m.home)} – ${esc(m.away)}<br><span class="muted">${esc(m.venue)} · ${esc(m.comp)}</span></td>
+      <td class="small">${state.matches.some(x => x.ibId === m.id) ? "<span class=muted>Tillagd</span>" : `<button class="outline" data-ibadd="${esc(m.id)}">Lägg till</button>`}</td></tr>`).join("") +
+    `</tbody></table>` : "";
+
+  // Uttagning
+  const r = select();
+  $("result").innerHTML = r.lineups.map(l => {
+    const total = POS.reduce((a, x) => a + (l.match.need[x] || 0), 0);
+    return `<article><header><b>${esc(l.match.name)}</b> <span class="muted">${l.match.start ? esc(fmtWhen(l.match.start)) + " · " : ""}${l.slots.length}/${total}</span></header>
+      ${POS.map(x => {
+        const list = l.slots.filter(y => y.pos === x);
+        const miss = (l.match.need[x] || 0) - list.length;
+        if (!(l.match.need[x] > 0)) return "";
+        return `<div style="margin-bottom:.5rem">${posTag(x)}<b>${POS_NAME[x]}</b><br>` +
+          list.map(y => `${esc(y.e.p.nr != null && y.e.p.nr !== "" ? "#" + y.e.p.nr + " " : "")}${esc(y.e.p.name)}` +
+            (y.kind === 1 ? ` <span class="muted">(reserv, ord. ${y.e.p.prim})</span>` : y.kind === 2 ? ` <span class="muted">(utfyllnad, ord. ${y.e.p.prim})</span>` : "") +
+            (y.e.used > 1 ? ` <span class="muted">(${y.e.used} matcher)</span>` : "") +
+            ` <span class="muted">· ${Math.round(y.e.s * 100)}</span>`).join("<br>") +
+          (miss > 0 ? `<br><span style="color:#c0392b">Saknas ${miss}</span>` +
+            r.pool.filter(e => (e.p.prim === x || (e.p.res || []).includes(x)) && !list.some(y => y.e === e))
+              .map(e => `<br><span class="muted">${esc(e.p.name)}: ${esc(r.why(l, e))}</span>`).join("") : "") + `</div>`;
+      }).join("")}${`<hr><b>Femmor</b>` + femmor(l).map((f, i) => `<div style="margin:.3rem 0"><b>${i + 1}:a</b> ` +
+        ["B", "C", "F"].map(p => f[p].length ? posTag(p) + f[p].map(y => esc(y.e.p.name)).join(", ") : "").filter(Boolean).join(" &nbsp; ") + `</div>`).join("") +
+        `<div class="muted">MV: ${l.slots.filter(x => x.pos === "MV").map(y => esc(y.e.p.name)).join(", ") || "–"}</div>`}${(() => {
+        const res = r.pool.filter(e => !e.ms.includes(l.match) && !e.ms.some(m => r.clash(m, l.match)));
+        return `<footer><b>Reserver</b><br>` + (res.map(e => `${[e.p.prim, ...(e.p.res || [])].map((p, i) => posTag(p, i > 0)).join("")} ${esc(e.p.name)} <span class="muted">· ${Math.round(e.s * 100)}${e.used ? ` · ${e.used} match${e.used > 1 ? "er" : ""}` : ""}</span>`).join("<br>") || `<span class="muted">Inga lediga spelare</span>`) + `</footer>`;
+      })()}</article>`;
+  }).join("");
+  $("bench").innerHTML = (r.bench.map(e => `${posTag(e.p.prim)} ${esc(e.p.name)} <span class="muted">· ${Math.round(e.s * 100)}</span>`).join("<br>") || `<span class="muted">Alla tillgängliga är uttagna.</span>`) +
+    (r.unavailable.length ? `<p class="muted">Kan inte spela: ${r.unavailable.map(p => esc(p.name)).join(", ")}</p>` : "");
+}
+
+function femmor(l) {
+  // Antal femmor = flest som behövs av C (1/femma), B och F (2/femma). Bäst närvaro i femma 1.
+  const n = Math.max(1, l.match.need.C || 0, Math.ceil((l.match.need.B || 0) / 2), Math.ceil((l.match.need.F || 0) / 2));
+  const fs = Array.from({ length: n }, () => ({ B: [], C: [], F: [] }));
+  for (const pos of ["B", "C", "F"]) {
+    const list = l.slots.filter(x => x.pos === pos).sort((a, b) => b.e.s - a.e.s);
+    const per = Math.ceil(list.length / n) || 1;
+    list.forEach((x, i) => fs[Math.min(n - 1, Math.floor(i / per))][pos].push(x));
+  }
+  return fs;
+}
+
+function asText() {
+  const r = select();
+  return r.lineups.map(l => `${l.match.name}\n` + POS.filter(x => l.match.need[x] > 0).map(x =>
+    `  ${POS_NAME[x]}: ` + l.slots.filter(y => y.pos === x).map(y => y.e.p.name).join(", ")).join("\n") +
+    `\n  Femmor:\n` + femmor(l).map((f, i) => `    ${i + 1}:a  ` + ["B", "C", "F"].map(p => `${p}: ${f[p].map(y => y.e.p.name).join(", ")}`).join("  ")).join("\n")).join("\n\n") +
+    (r.bench.length ? `\n\nEj uttagna: ${r.bench.map(e => e.p.name).join(", ")}` : "");
+}
+
+// ---------- Händelser ----------
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(t) {
+  document.querySelectorAll("section[id^=tab-]").forEach(s => s.hidden = s.id !== "tab-" + t);
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("inactive", b.dataset.tab !== t));
+  localStorage.setItem(KEY + ".tab", t);
+}
+$("newPrim").innerHTML = POS.map(x => `<option value="${x}">${POS_NAME[x]}</option>`).join("");
+$("newPrim").value = "F";
+
+$("addForm").onsubmit = e => {
+  e.preventDefault();
+  const nr = $("newNr").value;
+  state.players.push({ id: uid(), nr: nr === "" ? null : +nr, name: $("newName").value.trim(), prim: $("newPrim").value, res: [], available: true });
+  $("newNr").value = ""; $("newName").value = ""; commit(); $("newNr").focus();
+};
+
+const byId = el => state.players.find(p => p.id === el.closest("tr").dataset.id);
+document.addEventListener("change", e => {
+  const t = e.target, tr = t.closest("tr");
+  if (tr?.dataset.id) {
+    const p = byId(t);
+    if (t.dataset.res) { p.res = POS.filter(x => x === t.dataset.res ? t.checked : (p.res || []).includes(x)); }
+    else if (t.dataset.f === "available") p.available = t.checked;
+    else if (t.dataset.f === "prim") { p.prim = t.value; p.res = (p.res || []).filter(x => x !== t.value); }
+    else if (["nr", "total", "week"].includes(t.dataset.f)) p[t.dataset.f] = t.value === "" ? null : +t.value;
+    else if (t.dataset.f) p[t.dataset.f] = t.value;
+    return commit();
+  }
+  if (tr?.dataset.mid) {
+    const m = state.matches.find(x => x.id === tr.dataset.mid);
+    if (t.dataset.need) m.need[t.dataset.need] = +t.value || 0; else m[t.dataset.mf] = t.value;
+    return commit();
+  }
+  if (["maxTotal", "maxWeek", "wWeek", "maxPer", "gapMin"].includes(t.id)) { state.settings[t.id] = +t.value; commit(); }
+});
+$("wWeek").oninput = e => { state.settings.wWeek = +e.target.value; commit(); };
+document.addEventListener("click", e => {
+  if (e.target.matches("[data-del]")) { const p = byId(e.target); if (confirm(`Ta bort ${p.name}?`)) { state.players = state.players.filter(x => x !== p); commit(); } }
+  if (e.target.matches("[data-mdel]")) { state.matches = state.matches.filter(m => m.id !== e.target.closest("tr").dataset.mid); commit(); }
+});
+document.addEventListener("click", e => {
+  const id = e.target.dataset?.ibadd; if (!id) return;
+  const m = state.ibMatches.find(x => String(x.id) === id);
+  state.matches.push({ id: uid(), ibId: m.id, start: m.start ? m.start.slice(0, 16) : "", name: `${m.home} – ${m.away}`, need: { MV:1, B:4, C:2, F:4 } });
+  commit();
+});
+$("addMatch").onclick = () => { state.matches.push({ id: uid(), name: `Match ${state.matches.length + 1}`, need: { MV:1, B:4, C:2, F:4 } }); commit(); };
+$("newWeek").onclick = () => { if (confirm("Nollställ veckans närvaro och markera alla som tillgängliga?")) { state.players.forEach(p => { p.week = null; p.available = true; }); commit(); } };
+$("copyBtn").onclick = () => navigator.clipboard.writeText(asText()).then(() => $("copyBtn").textContent = "Kopierat!");
+
+// ---------- Import ----------
+const norm = s => String(s ?? "").trim().toLowerCase();
+const num = v => { if (v === "" || v == null) return null; const n = parseFloat(String(v).replace(",", ".").replace("%", "")); return isNaN(n) ? null : n; };
+const pick = (row, ...keys) => { for (const k of Object.keys(row)) if (keys.includes(norm(k))) return row[k]; };
+const parsePos = v => { const s = String(v ?? "").toUpperCase().trim();
+  return ({ M:"MV", MV:"MV", MÅLVAKT:"MV", G:"MV", B:"B", BACK:"B", C:"C", CENTER:"C", F:"F", FORWARD:"F", FW:"F", A:"F", ANFALL:"F" })[s]; };
+
+function importSquad(rows) {
+  let n = 0;
+  for (const r of rows) {
+    const name = String(pick(r, "namn", "name", "spelare") ?? "").trim(); if (!name) continue;
+    const prim = parsePos(pick(r, "position", "primär", "primar", "pos")) || "F";
+    const res = String(pick(r, "reserv", "reservposition", "reserver") ?? "").split(/[,;/ ]+/).map(parsePos).filter(x => x && x !== prim);
+    const nr = num(pick(r, "nummer", "nr", "#"));
+    let p = state.players.find(x => norm(x.name) === norm(name));
+    if (!p) { p = { id: uid(), name, available: true }; state.players.push(p); }
+    Object.assign(p, { prim, res: [...new Set(res)], nr }); n++;
+  }
+  commit(); return n;
+}
+function importAttendance(rows) {
+  let n = 0; const miss = [];
+  for (const r of rows) {
+    const name = pick(r, "namn", "name", "spelare", "deltagare"); if (!name) continue;
+    const p = state.players.find(x => norm(x.name) === norm(name));
+    if (!p) { miss.push(name); continue; }
+    const t = num(pick(r, "totalt", "total", "närvaro", "narvaro")), w = num(pick(r, "vecka", "veckan", "week"));
+    if (t != null) p.total = t; if (w != null) p.week = w; n++;
+  }
+  commit(); return { updated: n, notFound: miss };
+}
+function readSheet(file) {
+  return file.arrayBuffer().then(buf => { const wb = XLSX.read(buf); return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" }); });
+}
+$("fileSquad").onchange = async e => { const n = importSquad(await readSheet(e.target.files[0])); $("msg").textContent = `${n} spelare importerade/uppdaterade.`; e.target.value = ""; };
+$("fileAtt").onchange = async e => { const r = importAttendance(await readSheet(e.target.files[0]));
+  $("msg").textContent = `Närvaro uppdaterad för ${r.updated} spelare.` + (r.notFound.length ? ` Hittades inte i truppen: ${r.notFound.join(", ")}` : ""); e.target.value = ""; };
+$("exportJson").onclick = () => { const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], { type: "application/json" }));
+  a.download = `laguttagning-${new Date().toISOString().slice(0, 10)}.json`; a.click(); };
+$("fileJson").onchange = async e => { setState(JSON.parse(await e.target.files[0].text())); $("msg").textContent = "Backup inläst."; e.target.value = ""; };
+// ---------- innebandy.se ----------
+function fmtWhen(iso) {
+  if (!iso) return "Ej satt";
+  const d = new Date(iso);
+  return d.toLocaleDateString("sv-SE", { weekday: "short", day: "numeric", month: "numeric" }) + " " + d.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+}
+$("ibUrl").oninput = e => {
+  const m = e.target.value.match(/sasong\/(\d+)\/lag\/(\d+)/);
+  $("ibCmd").innerHTML = m ? `Kör i projektmappen (ib-summarizer2):<br><b>node tools/fetch-team.js ${m[1]} ${m[2]} tmp/lag</b><br>Filen hamnar i tmp/lag/seasons_${m[1]}_teams_${m[2]}.json` : "Länken ska innehålla /sasong/NR/lag/NR";
+};
+const IB_POS = { "målvakt": "MV", "back": "B", "center": "C", "forward": "F", "anfallare": "F", "ytter": "F" };
+function importInnebandy(data) {
+  if (!data || !Array.isArray(data.Players)) throw new Error("Hittar inga spelare (Players) i filen");
+  let n = 0;
+  for (const pl of data.Players) {
+    if (!pl.Name) continue;
+    let p = state.players.find(x => (x.ibId && x.ibId === pl.PlayerID) || norm(x.name) === norm(pl.Name));
+    if (!p) { p = { id: uid(), name: pl.Name, prim: IB_POS[norm(pl.Position)] || "F", res: [], available: true }; state.players.push(p); }
+    p.ibId = pl.PlayerID;
+    p.name = pl.Name;
+    if (pl.ShirtNo) p.nr = pl.ShirtNo;
+    if (IB_POS[norm(pl.Position)]) p.prim = IB_POS[norm(pl.Position)];
+    n++;
+  }
+  state.ibMatches = [];
+  for (const c of data.Competitions || []) for (const m of c.Matches || []) {
+    const start = m.MatchDateTime && !m.MatchDateTime.startsWith("0001") ? m.MatchDateTime : null;
+    state.ibMatches.push({ id: m.MatchID, start, home: m.HomeTeam || "", away: m.AwayTeam || "", venue: m.Venue || m.MainVenue || "", comp: c.Name || m.CompetitionName || "" });
+  }
+  state.ibMatches.sort((a, b) => (a.start || "9").localeCompare(b.start || "9"));
+  state.ibTeam = data.Name || "";
+  commit();
+  return { players: n, matches: state.ibMatches.length };
+}
+$("fileIb").onchange = async e => {
+  try { const r = importInnebandy(JSON.parse(await e.target.files[0].text()));
+    $("msg").textContent = `${state.ibTeam}: ${r.players} spelare och ${r.matches} matcher inlästa. Positioner saknas ofta på innebandy.se – kontrollera under Trupp.`; }
+  catch (err) { $("msg").textContent = "Fel: " + err.message; }
+  e.target.value = "";
+};
+
+function setState(s) { if (!s || !Array.isArray(s.players)) throw new Error("Ogiltigt format"); state = s; commit(); }
+
+window.LagAPI = { getState: () => JSON.parse(JSON.stringify(state)), setState, importSquad, importAttendance, importInnebandy, select, asText };
+
+$("cfgBtn").onclick = async () => {
+  const repo = $("cfgRepo").value.trim(), token = $("cfgToken").value.trim(), pw = $("cfgPw").value;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token || pw.length < 12) { $("msg").textContent = "Fyll i repo (ägare/namn), token och ett lösenord på minst 12 tecken."; return; }
+  $("cfgBtn").setAttribute("aria-busy", "true");
+  try {
+    cloud.cfg = { repo, token }; cloud.pw = pw; cloud.sha = null; cloud.salt = null;
+    const remote = await cloudPull();
+    if (remote && !confirm("Det finns redan data i repot. Skriva över den med din lokala data?")) { state = remote; render(); }
+    cloud.ready = true; await cloudPush();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([await encrypt({ repo, token }, pw)], { type: "text/plain" }));
+    a.download = "token.enc"; a.click();
+    $("cfgToken").value = ""; $("cfgPw").value = "";
+    $("msg").textContent = "Klart. Lägg token.enc bredvid index.html i appens repo.";
+  } catch (e) { cloud.ready = false; $("msg").textContent = "Fel: " + e.message + " (kontrollera repo-namn och tokenbehörighet)"; }
+  finally { $("cfgBtn").removeAttribute("aria-busy"); }
+};
+
+showTab(localStorage.getItem(KEY + ".tab") || "trupp");
+render();
+cloudInit();
+</script>
+</body>
+</html>
