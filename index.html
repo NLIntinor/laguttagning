@@ -82,9 +82,8 @@
     <h3>Helgens matcher</h3>
     <div class="row">
       <label>Max matcher per spelare <input id="maxPer" type="number" min="1" max="5"></label>
-      <label>Minst minuter mellan matchstarter för att dubblera <input id="gapMin" type="number" min="0" step="15"></label>
     </div>
-    <p class="muted">En spelare kan spela flera matcher om de inte krockar (starttiderna ligger minst så långt isär). Matcher utan starttid räknas som krockande. Alla får en match först; extra matcher går till dem med bäst närvaro på rätt position.</p>
+    <p class="muted">En spelare kan spela flera matcher så länge de inte går samtidigt (starter inom 60 min). Alla får en match först; extra matcher går till dem med bäst närvaro på rätt position.</p>
     <table>
       <thead><tr><th>Match</th><th>Start</th><th class="small">MV</th><th class="small">B</th><th class="small">C</th><th class="small">F</th><th class="small"></th></tr></thead>
       <tbody id="matchBody"></tbody>
@@ -277,8 +276,8 @@ function select() {
   const pool = state.players.filter(p => p.available !== false)
     .map(p => ({ p, s: score(p), used: 0 }))
     .sort((a, b) => b.s - a.s || a.p.name.localeCompare(b.p.name, "sv"));
-  const gap = (state.settings.gapMin ?? 120) * 60000;
-  const clash = (a, b) => !a.start || !b.start || Math.abs(new Date(a.start) - new Date(b.start)) < gap;
+  // Krock bara om matcherna går samtidigt (starter inom en matchlängd, 60 min).
+  const clash = (a, b) => !!a.start && !!b.start && Math.abs(new Date(a.start) - new Date(b.start)) < 60 * 60000;
   const lineups = state.matches.map(m => ({ match: m, slots: [] }));
   pool.forEach(e => e.ms = []);
   const canPlay = (l, e) => e.used < maxPer && !e.ms.some(m => m === l.match || clash(m, l.match));
@@ -345,8 +344,7 @@ function select() {
   const unavailable = state.players.filter(p => p.available === false);
   return { lineups, bench, unavailable, pool, clash, why: (l, e) => e.ms.includes(l.match) ? "redan i matchen" :
     e.used >= maxPer ? `max ${maxPer} match${maxPer > 1 ? "er" : ""}` :
-    !l.match.start ? "matchen saknar starttid" :
-    (e.ms.find(m => clash(m, l.match)) ? `krock med ${e.ms.find(m => clash(m, l.match)).name}${e.ms.find(m => clash(m, l.match)).start ? "" : " (saknar starttid)"}` : "?") };
+    (e.ms.find(m => clash(m, l.match)) ? `går samtidigt som ${e.ms.find(m => clash(m, l.match)).name}` : "?") };
 }
 
 // ---------- Rendering ----------
@@ -382,11 +380,10 @@ function render() {
 
   // Matcher
   $("maxPer").value = s.maxPer;
-  $("gapMin").value = s.gapMin ?? 120;
   $("matchBody").innerHTML = state.matches.map(m => `
     <tr data-mid="${m.id}">
       <td><input data-mf="name" value="${esc(m.name)}"></td>
-      <td><input type="datetime-local" data-mf="start" value="${esc(m.start || "")}"${m.start ? "" : ` style="border-color:#c0392b" title="Saknar starttid – räknas som krock med alla matcher"`}></td>
+      <td><input type="datetime-local" data-mf="start" value="${esc(m.start || "")}"></td>
       ${POS.map(x => `<td><input type="number" min="0" data-need="${x}" value="${m.need[x] ?? 0}"></td>`).join("")}
       <td><button class="outline secondary" data-mdel>✕</button></td>
     </tr>`).join("");
@@ -480,7 +477,7 @@ document.addEventListener("change", e => {
     if (t.dataset.need) m.need[t.dataset.need] = +t.value || 0; else m[t.dataset.mf] = t.value;
     return commit();
   }
-  if (["maxTotal", "maxWeek", "wWeek", "maxPer", "gapMin"].includes(t.id)) { state.settings[t.id] = +t.value; commit(); }
+  if (["maxTotal", "maxWeek", "wWeek", "maxPer"].includes(t.id)) { state.settings[t.id] = +t.value; commit(); }
 });
 $("wWeek").oninput = e => { state.settings.wWeek = +e.target.value; commit(); };
 document.addEventListener("click", e => {
