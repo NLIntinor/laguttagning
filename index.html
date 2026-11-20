@@ -292,7 +292,7 @@ function select() {
   const clash = (a, b) => !!a.start && !!b.start && Math.abs(new Date(a.start) - new Date(b.start)) < 60 * 60000;
   const lineups = state.matches.map(m => ({ match: m, slots: [] }));
   pool.forEach(e => e.ms = []);
-  const canPlay = (l, e) => e.used < maxPer && !e.ms.some(m => m === l.match || clash(m, l.match));
+  const canPlay = (l, e) => e.used < maxPer && !(l.match.out || []).includes(e.p.id) && !e.ms.some(m => m === l.match || clash(m, l.match));
 
   // Steg 1: alla får en match (primär först, sedan reserv), jämnt fördelat mellan matcherna.
   const primary = (e, pos) => e.p.prim === pos;
@@ -411,6 +411,8 @@ function render() {
 
   // Uttagning
   const r = select();
+  const isOut = (l, e) => (l.match.out || []).includes(e.p.id);
+  const outBtn = (l, e) => ` <a href="#" data-out="${l.match.id}|${e.p.id}" title="Kan inte vara med i denna match" style="text-decoration:none;color:#c0392b">✕</a>`;
   $("result").innerHTML = r.lineups.map(l => {
     const total = POS.reduce((a, x) => a + (l.match.need[x] || 0), 0);
     return `<article><header><b>${esc(l.match.name)}</b> <span class="muted">${l.match.start ? esc(fmtWhen(l.match.start)) + " · " : ""}${l.slots.length}/${total}</span></header>
@@ -422,15 +424,17 @@ function render() {
           list.map(y => `${esc(y.e.p.nr != null && y.e.p.nr !== "" ? "#" + y.e.p.nr + " " : "")}${esc(y.e.p.name)}` +
             (y.kind === 1 ? ` <span class="muted">(reserv, ord. ${y.e.p.prim})</span>` : y.kind === 2 ? ` <span class="muted">(utfyllnad, ord. ${y.e.p.prim})</span>` : "") +
             (y.e.used > 1 ? ` <span class="muted">(${y.e.used} matcher)</span>` : "") +
-            ` <span class="muted">· ${Math.round(y.e.s * 100)}</span>`).join("<br>") +
+            ` <span class="muted">· ${Math.round(y.e.s * 100)}</span>` + outBtn(l, y.e)).join("<br>") +
           (miss > 0 ? `<br><span style="color:#c0392b">Saknas ${miss}</span>` +
-            r.pool.filter(e => (e.p.prim === x || (e.p.res || []).includes(x)) && !list.some(y => y.e === e))
+            r.pool.filter(e => (e.p.prim === x || (e.p.res || []).includes(x)) && !list.some(y => y.e === e) && !isOut(l, e))
               .map(e => `<br><span class="muted">${esc(e.p.name)}: ${esc(r.why(l, e))}</span>`).join("") : "") + `</div>`;
       }).join("")}${`<hr><b>Femmor</b>` + femmor(l).map((f, i) => `<div style="margin:.3rem 0"><b>${i + 1}:a</b> ` +
         ["B", "C", "F"].map(p => f[p].length ? posTag(p) + f[p].map(y => esc(y.e.p.name)).join(", ") : "").filter(Boolean).join(" &nbsp; ") + `</div>`).join("") +
         `<div class="muted">MV: ${l.slots.filter(x => x.pos === "MV").map(y => esc(y.e.p.name)).join(", ") || "–"}</div>`}${(() => {
-        const res = r.pool.filter(e => !e.ms.includes(l.match) && !e.ms.some(m => r.clash(m, l.match)));
-        return `<footer><b>Reserver</b><br>` + (res.map(e => `${[e.p.prim, ...(e.p.res || [])].map((p, i) => posTag(p, i > 0)).join("")} ${esc(e.p.name)} <span class="muted">· ${Math.round(e.s * 100)}${e.used ? ` · ${e.used} match${e.used > 1 ? "er" : ""}` : ""}</span>`).join("<br>") || `<span class="muted">Inga lediga spelare</span>`) + `</footer>`;
+        const res = r.pool.filter(e => !e.ms.includes(l.match) && !isOut(l, e) && !e.ms.some(m => r.clash(m, l.match)));
+        const outs = state.players.filter(p => (l.match.out || []).includes(p.id));
+        return `<footer><b>Reserver</b><br>` + (res.map(e => `${[e.p.prim, ...(e.p.res || [])].map((p, i) => posTag(p, i > 0)).join("")} ${esc(e.p.name)} <span class="muted">· ${Math.round(e.s * 100)}${e.used ? ` · ${e.used} match${e.used > 1 ? "er" : ""}` : ""}</span>` + outBtn(l, e)).join("<br>") || `<span class="muted">Inga lediga spelare</span>`) +
+          (outs.length ? `<br><b>Kan inte i denna match</b><br>` + outs.map(p => `${esc(p.name)} <a href="#" data-in="${l.match.id}|${p.id}" style="text-decoration:none">↺ ångra</a>`).join("<br>") : "") + `</footer>`;
       })()}</article>`;
   }).join("");
   $("bench").innerHTML = (r.bench.map(e => `${posTag(e.p.prim)} ${esc(e.p.name)} <span class="muted">· ${Math.round(e.s * 100)}</span>`).join("<br>") || `<span class="muted">Alla tillgängliga är uttagna.</span>`) +
@@ -495,6 +499,13 @@ document.addEventListener("change", e => {
 });
 $("wWeek").oninput = e => { state.settings.wWeek = +e.target.value; commit(); };
 document.addEventListener("click", e => {
+  if (e.target.dataset?.out || e.target.dataset?.in) {
+    e.preventDefault();
+    const [mid, pid] = (e.target.dataset.out || e.target.dataset.in).split("|");
+    const m = state.matches.find(x => x.id === mid); if (!m) return;
+    m.out = (m.out || []).filter(x => x !== pid).concat(e.target.dataset.out ? [pid] : []);
+    return commit();
+  }
   if (e.target.matches("[data-cyc]")) {
     const p = byId(e.target), x = e.target.dataset.cyc, res = p.res || [];
     if (x === p.prim) { p.prim = res[0] || null; p.res = res.slice(1); }          // primär → av
